@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "餐饮计算器",
+  "version": "1.0.0",
+  "identifier": "com.faocn.catering-calculator",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "餐饮计算器",
+        "width": 600,
+        "height": 700,
+        "minWidth": 500,
+        "minHeight": 500,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVGNDdDNThBQ0RDMTVFNTAKUldSUVhzSE5pc1ZIN3g4OFJtVG1TRUo5ZXF0b0FqdGZaSUZmckZZMTRNQjV2aW00R1Bsa0VlTVYK",
+      "endpoints": [
+        "https://tele-api.faocn.com/catering/app/update-check/{{target}}/{{arch}}/{{current_version}}"
+      ]
+    }
+  }
+}
