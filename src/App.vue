@@ -8,12 +8,21 @@ const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in windo
 
 // ──────────── 吸附功能 ────────────
 const snapEnabled = ref(false);
-const snapPosition = ref<'Left' | 'Right' | 'Top' | 'Bottom'>('Right');
+const snapPosition = ref<'Left' | 'Right'>('Right');
 const snapGap = ref(0);
 const snapTargetFound = ref(false);
 const snapTargetTitle = ref('');
 const showSnapPopover = ref(false);
-const SNAP_TARGET_KEYWORD = '闲鱼管家';
+const SNAP_TARGET_KEYWORDS = [
+  '闲管家',
+  '闲管家-闲鱼客服聊天',
+  '闲鱼客服聊天',
+  '闲鱼',
+  'XianGuanJia',
+  'Xian Guan Jia',
+];
+const SNAP_TARGET_KEYWORD = SNAP_TARGET_KEYWORDS[0];
+const SNAP_TARGET_DISPLAY_NAME = '闲鱼';
 let snapStatusTimer: ReturnType<typeof setInterval> | null = null;
 
 async function toggleSnap(enable: boolean) {
@@ -28,6 +37,7 @@ async function toggleSnap(enable: boolean) {
         config: {
           position: snapPosition.value,
           target_keyword: SNAP_TARGET_KEYWORD,
+          target_keywords: SNAP_TARGET_KEYWORDS,
           gap: snapGap.value,
         },
       });
@@ -55,11 +65,12 @@ async function updateSnapStatus() {
       enabled: boolean;
       target_found: boolean;
       target_title: string | null;
-      position: string;
+      position: 'Left' | 'Right' | 'Top' | 'Bottom';
     }>('get_snap_status');
     snapEnabled.value = status.enabled;
     snapTargetFound.value = status.target_found;
     snapTargetTitle.value = status.target_title || '';
+    snapPosition.value = status.position === 'Left' ? 'Left' : 'Right';
   } catch {
     // 静默
   }
@@ -123,7 +134,8 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.1.1";
+const APP_VERSION = "1.1.2";
+const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
 
 const originalAmount = ref<number | undefined>(undefined);
 const receivedRate = ref<number | undefined>(undefined);
@@ -155,25 +167,67 @@ function focusOriginalAmount() {
   });
 }
 
+function compareVersion(versionA: string, versionB: string) {
+  const partsA = versionA.split('.').map(Number);
+  const partsB = versionB.split('.').map(Number);
+  const length = Math.max(partsA.length, partsB.length);
+  for (let i = 0; i < length; i++) {
+    const valueA = partsA[i] || 0;
+    const valueB = partsB[i] || 0;
+    if (valueA > valueB) return 1;
+    if (valueA < valueB) return -1;
+  }
+  return 0;
+}
+
+function getUpdatePlatform() {
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes('mac')) return 'darwin-aarch64';
+  if (platform.includes('win')) return 'windows-x86_64';
+  return 'unknown';
+}
+
+async function fetchLatestVersion() {
+  const platform = getUpdatePlatform();
+  const response = await fetch(`${UPDATE_CHECK_URL}/${platform}/${platform}/${APP_VERSION}`);
+  if (response.status === 204) return null;
+  if (!response.ok) {
+    throw new Error(`接口请求失败：${response.status}`);
+  }
+  return response.json();
+}
+
+async function openDownloadUrl(downloadUrl: string) {
+  if (isTauri) {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(downloadUrl);
+    return;
+  }
+  window.open(downloadUrl, '_blank');
+}
+
+async function promptDownloadUpdate(updateInfo: Record<string, unknown>, silent = false) {
+  const version = String(updateInfo.version || updateInfo.versionName || '');
+  const downloadUrl = String(updateInfo.url || updateInfo.downloadUrl || '');
+  if (!version || !downloadUrl || compareVersion(version, APP_VERSION) <= 0) {
+    if (!silent) ElMessage.success('已是最新版本');
+    return;
+  }
+  const confirmed = await ElMessageBox.confirm(
+    `发现新版本 v${version}，是否打开下载页面？`,
+    '版本更新',
+    { confirmButtonText: '立即下载', cancelButtonText: '稍后' }
+  ).catch(() => false);
+  if (confirmed) {
+    await openDownloadUrl(downloadUrl);
+  }
+}
+
 async function checkForUpdates() {
-  if (!isTauri) return;
   try {
-    const { check } = await import('@tauri-apps/plugin-updater');
-    const update = await check();
-    if (update) {
-      const confirmed = await ElMessageBox.confirm(
-        `发现新版本 v${update.version}，是否立即更新？`,
-        '版本更新',
-        { confirmButtonText: '立即更新', cancelButtonText: '稍后' }
-      ).catch(() => false);
-      if (confirmed) {
-        await update.downloadAndInstall();
-        const { relaunch } = await import('@tauri-apps/plugin-process');
-        await relaunch();
-      }
-    }
+    const updateInfo = await fetchLatestVersion();
+    if (updateInfo) await promptDownloadUpdate(updateInfo, true);
   } catch {
-    // 静默失败
   }
 }
 
@@ -252,6 +306,16 @@ const editingBrandIndex = ref(0);
 
 const CHANGELOG = [
   {
+    version: '1.1.2',
+    date: '2026-05-06',
+    changes: [
+      '更新检查改为打开下载链接，提升 macOS 更新稳定性',
+      '优化窗口吸附，支持匹配闲鱼相关窗口',
+      '吸附设置仅保留左右方向，目标应用统一展示为闲鱼',
+      '新增复制报价自动粘贴到闲鱼聊天框方案文档',
+    ],
+  },
+  {
     version: '1.1.1',
     date: '2026-05-06',
     changes: [
@@ -284,28 +348,11 @@ const CHANGELOG = [
 ];
 
 async function manualCheckUpdate() {
-  if (!isTauri) {
-    ElMessage.info('仅桌面版支持更新检查');
-    return;
-  }
   isCheckingUpdate.value = true;
   try {
-    const { check } = await import('@tauri-apps/plugin-updater');
-    const update = await check();
-    if (update) {
-      const confirmed = await ElMessageBox.confirm(
-        `发现新版本 v${update.version}，是否立即更新？`,
-        '版本更新',
-        { confirmButtonText: '立即更新', cancelButtonText: '稍后' }
-      ).catch(() => false);
-      if (confirmed) {
-        await update.downloadAndInstall();
-        const { relaunch } = await import('@tauri-apps/plugin-process');
-        await relaunch();
-      }
-    } else {
-      ElMessage.success('已是最新版本');
-    }
+    const updateInfo = await fetchLatestVersion();
+    if (updateInfo) await promptDownloadUpdate(updateInfo);
+    else ElMessage.success('已是最新版本');
   } catch (e) {
     ElMessage.error('检查更新失败: ' + (e instanceof Error ? e.message : String(e)));
   } finally {
@@ -542,7 +589,7 @@ function handleClear() {
             <div class="snap-panel-title">吸附设置</div>
             <div class="snap-panel-row">
               <span class="snap-label">目标应用</span>
-              <span class="snap-value">{{ SNAP_TARGET_KEYWORD }}</span>
+              <span class="snap-value">{{ SNAP_TARGET_DISPLAY_NAME }}</span>
             </div>
             <div class="snap-panel-row">
               <span class="snap-label">连接状态</span>
@@ -559,8 +606,6 @@ function handleClear() {
               <el-radio-group v-model="snapPosition" size="small" @change="handleSnapPositionChange">
                 <el-radio-button value="Left">左</el-radio-button>
                 <el-radio-button value="Right">右</el-radio-button>
-                <el-radio-button value="Top">上</el-radio-button>
-                <el-radio-button value="Bottom">下</el-radio-button>
               </el-radio-group>
             </div>
             <div class="snap-panel-row">

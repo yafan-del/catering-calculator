@@ -18,11 +18,9 @@ jobs:
           - platform: windows-latest
             args: ''
             target: x86_64-pc-windows-msvc
-            bundle_dir: target/release/bundle/nsis
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             target: aarch64-apple-darwin,x86_64-apple-darwin
-            bundle_dir: target/universal-apple-darwin/release/bundle/dmg
 
     runs-on: ${{ matrix.platform }}
 
@@ -54,47 +52,14 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
-      - name: Verify signing key
-        shell: bash
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "ERROR: TAURI_SIGNING_PRIVATE_KEY is EMPTY!"
-          else
-            echo "TAURI_SIGNING_PRIVATE_KEY is set, length: ${#TAURI_SIGNING_PRIVATE_KEY}"
-            echo "First 20 chars: ${TAURI_SIGNING_PRIVATE_KEY:0:20}..."
-            echo "Last 10 chars: ...${TAURI_SIGNING_PRIVATE_KEY: -10}"
-          fi
-
       - name: Build Tauri app
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'catering2026'
-        run: pnpm tauri build ${{ matrix.args }}
-
-      - name: Debug - List artifacts
-        shell: bash
-        run: |
-          echo "=== All bundle dirs ==="
-          find src-tauri/target -path "*/bundle/*" -type f 2>/dev/null | head -50
-          echo "=== All .sig files ==="
-          find src-tauri/target -name "*.sig" 2>/dev/null || echo "none"
-          echo "=== All .tar.gz files ==="
-          find src-tauri/target -name "*.tar.gz" 2>/dev/null || echo "none"
-
-      - name: Create Release & Upload
-        shell: bash
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          gh release create "$TAG" --title "餐饮计算器 $TAG" --notes "请下载对应平台的安装包。" --latest 2>/dev/null || true
-          # Upload installers (.dmg / .exe)
-          for f in src-tauri/${{ matrix.bundle_dir }}/*; do
-            [ -f "$f" ] && [[ "$f" == *.dmg || "$f" == *.exe ]] && echo "Uploading $f" && gh release upload "$TAG" "$f" --clobber || true
-          done
-          # Upload updater bundles (.tar.gz, .sig, .nsis.zip)
-          find src-tauri/target -name "*.tar.gz" -o -name "*.sig" -o -name "*.nsis.zip" | while read f; do
-            [ -f "$f" ] && echo "Uploading $f" && gh release upload "$TAG" "$f" --clobber || true
-          done
+        with:
+          tagName: v__VERSION__
+          releaseName: '餐饮计算器 v__VERSION__'
+          releaseBody: '请下载对应平台的安装包。'
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

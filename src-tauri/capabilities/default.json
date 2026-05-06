@@ -13,7 +13,6 @@
     "core:window:allow-show",
     "core:window:allow-hide",
     "core:window:allow-set-focus",
-    "updater:default",
     "process:default"
   ]
 }

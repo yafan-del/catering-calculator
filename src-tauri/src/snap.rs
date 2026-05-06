@@ -19,6 +19,7 @@ pub enum SnapPosition {
 pub struct SnapConfig {
     pub position: SnapPosition,
     pub target_keyword: String,
+    pub target_keywords: Option<Vec<String>>,
     pub gap: i32,
 }
 
@@ -36,6 +37,17 @@ pub struct WindowRect {
     pub y: i32,
     pub width: i32,
     pub height: i32,
+}
+
+impl WindowRect {
+    fn to_physical(&self, scale_factor: f64) -> Self {
+        Self {
+            x: (self.x as f64 * scale_factor).round() as i32,
+            y: (self.y as f64 * scale_factor).round() as i32,
+            width: (self.width as f64 * scale_factor).round() as i32,
+            height: (self.height as f64 * scale_factor).round() as i32,
+        }
+    }
 }
 
 // ──────────────────────────── SnapManager ────────────────────────────
@@ -67,8 +79,8 @@ impl SnapManager {
             SnapPosition::Bottom => "Bottom",
         };
         log::info!(
-            "开始吸附: 目标={}, 位置={}, 间距={}",
-            config.target_keyword, position_str, config.gap
+            "开始吸附: 目标={:?}, 位置={}, 间距={}",
+            config.keywords(), position_str, config.gap
         );
 
         *self.config.lock().unwrap() = Some(config.clone());
@@ -82,7 +94,7 @@ impl SnapManager {
         thread::spawn(move || {
             while running.load(Ordering::SeqCst) {
                 if let Some(window) = app.get_webview_window("main") {
-                    match find_target_window(&config.target_keyword) {
+                    match find_target_window(&config.keywords()) {
                         Some((rect, title)) => {
                             target_found.store(true, Ordering::SeqCst);
                             *target_title.lock().unwrap() = Some(title);
@@ -97,13 +109,51 @@ impl SnapManager {
                             let mw = my_size.width as i32;
                             let mh = my_size.height as i32;
                             let gap = config.gap;
-
-                            let (nx, ny) = match config.position {
-                                SnapPosition::Right => (rect.x + rect.width + gap, rect.y),
-                                SnapPosition::Left => (rect.x - mw - gap, rect.y),
-                                SnapPosition::Top => (rect.x, rect.y - mh - gap),
-                                SnapPosition::Bottom => (rect.x, rect.y + rect.height + gap),
+                            let monitor_rect = match window.current_monitor() {
+                                Ok(Some(monitor)) => {
+                                    let pos = monitor.position();
+                                    let size = monitor.size();
+                                    WindowRect {
+                                        x: pos.x,
+                                        y: pos.y,
+                                        width: size.width as i32,
+                                        height: size.height as i32,
+                                    }
+                                }
+                                _ => WindowRect {
+                                    x: 0,
+                                    y: 0,
+                                    width: 1920,
+                                    height: 1080,
+                                },
                             };
+                            let screen_left = monitor_rect.x;
+                            let screen_top = monitor_rect.y;
+                            let screen_right = monitor_rect.x + monitor_rect.width;
+                            let screen_bottom = monitor_rect.y + monitor_rect.height;
+                            let scale_factor = window.scale_factor().unwrap_or(1.0);
+                            let target_rect = rect.to_physical(scale_factor);
+
+                            let (mut nx, mut ny) = match config.position {
+                                SnapPosition::Right => (target_rect.x + target_rect.width + gap, target_rect.y),
+                                SnapPosition::Left => (target_rect.x - mw - gap, target_rect.y),
+                                SnapPosition::Top => (target_rect.x, target_rect.y - mh - gap),
+                                SnapPosition::Bottom => (target_rect.x, target_rect.y + target_rect.height + gap),
+                            };
+                            if matches!(config.position, SnapPosition::Right) && nx + mw > screen_right {
+                                nx = target_rect.x - mw - gap;
+                            }
+                            if matches!(config.position, SnapPosition::Left) && nx < screen_left {
+                                nx = target_rect.x + target_rect.width + gap;
+                            }
+                            if matches!(config.position, SnapPosition::Bottom) && ny + mh > screen_bottom {
+                                ny = target_rect.y - mh - gap;
+                            }
+                            if matches!(config.position, SnapPosition::Top) && ny < screen_top {
+                                ny = target_rect.y + target_rect.height + gap;
+                            }
+                            nx = nx.clamp(screen_left, screen_right - mw);
+                            ny = ny.clamp(screen_top, screen_bottom - mh);
 
                             let _ = window.set_position(tauri::PhysicalPosition::new(nx, ny));
                         }
@@ -152,21 +202,35 @@ impl SnapManager {
     }
 }
 
+impl SnapConfig {
+    fn keywords(&self) -> Vec<String> {
+        match &self.target_keywords {
+            Some(keywords) if !keywords.is_empty() => keywords
+                .iter()
+                .map(|keyword| keyword.trim())
+                .filter(|keyword| !keyword.is_empty())
+                .map(ToString::to_string)
+                .collect(),
+            _ => vec![self.target_keyword.clone()],
+        }
+    }
+}
+
 // ──────────────────────────── 跨平台窗口查找 ────────────────────────────
 
 /// 查找包含指定关键词的目标窗口，返回其矩形和标题
-fn find_target_window(keyword: &str) -> Option<(WindowRect, String)> {
+fn find_target_window(keywords: &[String]) -> Option<(WindowRect, String)> {
     #[cfg(target_os = "windows")]
     {
-        find_target_window_windows(keyword)
+        find_target_window_windows(keywords)
     }
     #[cfg(target_os = "macos")]
     {
-        find_target_window_macos(keyword)
+        find_target_window_macos(keywords)
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let _ = keyword;
+        let _ = keywords;
         None
     }
 }
@@ -174,7 +238,7 @@ fn find_target_window(keyword: &str) -> Option<(WindowRect, String)> {
 // ──────────────────────────── Windows 实现 ────────────────────────────
 
 #[cfg(target_os = "windows")]
-fn find_target_window_windows(keyword: &str) -> Option<(WindowRect, String)> {
+fn find_target_window_windows(keywords: &[String]) -> Option<(WindowRect, String)> {
     use windows::core::PWSTR;
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -182,7 +246,7 @@ fn find_target_window_windows(keyword: &str) -> Option<(WindowRect, String)> {
     };
 
     struct SearchContext {
-        keyword: String,
+        keywords: Vec<String>,
         result: Option<(WindowRect, String)>,
     }
 
@@ -205,7 +269,7 @@ fn find_target_window_windows(keyword: &str) -> Option<(WindowRect, String)> {
         }
 
         let title = String::from_utf16_lossy(&buf[..read as usize]);
-        if title.contains(&ctx.keyword) {
+        if ctx.keywords.iter().any(|keyword| title.contains(keyword)) {
             let mut rect = RECT::default();
             if GetWindowRect(hwnd, &mut rect).is_ok() {
                 ctx.result = Some((
@@ -224,7 +288,7 @@ fn find_target_window_windows(keyword: &str) -> Option<(WindowRect, String)> {
     }
 
     let mut ctx = SearchContext {
-        keyword: keyword.to_string(),
+        keywords: keywords.to_vec(),
         result: None,
     };
 
@@ -241,7 +305,7 @@ fn find_target_window_windows(keyword: &str) -> Option<(WindowRect, String)> {
 // ──────────────────────────── macOS 实现 ────────────────────────────
 
 #[cfg(target_os = "macos")]
-fn find_target_window_macos(keyword: &str) -> Option<(WindowRect, String)> {
+fn find_target_window_macos(keywords: &[String]) -> Option<(WindowRect, String)> {
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
     use std::ffi::c_void;
@@ -324,8 +388,9 @@ fn find_target_window_macos(keyword: &str) -> Option<(WindowRect, String)> {
             };
 
             // 匹配关键词：窗口名称或所有者名称包含关键词
-            let matched =
-                (!name.is_empty() && name.contains(keyword)) || owner.contains(keyword);
+            let matched = keywords
+                .iter()
+                .any(|keyword| (!name.is_empty() && name.contains(keyword)) || owner.contains(keyword));
             if !matched {
                 continue;
             }
