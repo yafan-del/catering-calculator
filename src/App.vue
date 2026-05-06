@@ -110,7 +110,6 @@ async function toggleAlwaysOnTop() {
 import {
   type RoundMode,
   type Brand,
-  type DiscountTier,
   type HistoryRecord,
   calculate,
   matchTierRate,
