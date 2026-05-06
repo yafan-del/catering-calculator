@@ -9,10 +9,6 @@ on:
 permissions:
   contents: write
 
-env:
-  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
 jobs:
   build:
     strategy:
@@ -60,10 +56,13 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         with:
           tagName: v__VERSION__
           releaseName: '餐饮计算器 v__VERSION__'
           releaseBody: '请下载对应平台的安装包。'
           releaseDraft: false
           prerelease: false
+          includeUpdaterJson: true
           args: ${{ matrix.args }}
