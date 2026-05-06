@@ -134,7 +134,7 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.1.2";
+const APP_VERSION = "1.1.3";
 const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
 
 const originalAmount = ref<number | undefined>(undefined);
@@ -261,6 +261,11 @@ function handleOriginalAmountEnter() {
   }
 }
 
+function resetOriginalAmount() {
+  originalAmount.value = undefined;
+  focusOriginalAmount();
+}
+
 function handleGlobalKeydown(e: KeyboardEvent) {
   const isCtrlOrCmd = e.ctrlKey || e.metaKey;
 
@@ -305,6 +310,14 @@ const isCheckingUpdate = ref(false);
 const editingBrandIndex = ref(0);
 
 const CHANGELOG = [
+  {
+    version: '1.1.3',
+    date: '2026-05-06',
+    changes: [
+      '新增原价重置按钮，清空后自动回到输入框',
+      '默认启动宽度调整为 520px，减少窗口占用',
+    ],
+  },
   {
     version: '1.1.2',
     date: '2026-05-06',
@@ -689,6 +702,9 @@ function handleClear() {
             @keydown.enter="handleOriginalAmountEnter"
           />
           <span class="unit">元</span>
+        </div>
+        <div v-if="originalAmount" class="reset-section">
+          <el-button type="primary" :icon="Close" @click="resetOriginalAmount">重置原价</el-button>
         </div>
       </template>
       <div v-else class="no-config-tip">
