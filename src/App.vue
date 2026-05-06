@@ -124,7 +124,7 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
 
 const originalAmount = ref<number | undefined>(undefined);
 const receivedRate = ref<number | undefined>(undefined);
