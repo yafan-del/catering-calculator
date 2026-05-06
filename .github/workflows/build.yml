@@ -18,9 +18,11 @@ jobs:
           - platform: windows-latest
             args: ''
             target: x86_64-pc-windows-msvc
+            bundle_dir: target/release/bundle/nsis
           - platform: macos-latest
             args: '--target universal-apple-darwin'
             target: aarch64-apple-darwin,x86_64-apple-darwin
+            bundle_dir: target/universal-apple-darwin/release/bundle/dmg
 
     runs-on: ${{ matrix.platform }}
 
@@ -53,16 +55,26 @@ jobs:
         run: pnpm install
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
-        with:
-          tagName: v__VERSION__
-          releaseName: '餐饮计算器 v__VERSION__'
-          releaseBody: '请下载对应平台的安装包。'
-          releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
-          args: ${{ matrix.args }}
+        run: pnpm tauri build ${{ matrix.args }}
+
+      - name: Debug - List artifacts
+        shell: bash
+        run: |
+          echo "=== Bundle dir ==="
+          ls -laR src-tauri/${{ matrix.bundle_dir }}/ 2>/dev/null || echo "not found"
+          echo "=== All .sig files ==="
+          find src-tauri/target -name "*.sig" 2>/dev/null || echo "none"
+
+      - name: Create Release & Upload
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          gh release create "$TAG" --title "餐饮计算器 $TAG" --notes "请下载对应平台的安装包。" --latest 2>/dev/null || true
+          for f in src-tauri/${{ matrix.bundle_dir }}/*; do
+            [ -f "$f" ] && echo "Uploading $f" && gh release upload "$TAG" "$f" --clobber || true
+          done
