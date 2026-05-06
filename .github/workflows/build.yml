@@ -70,7 +70,7 @@ jobs:
       - name: Build Tauri app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 'catering2026'
         run: pnpm tauri build ${{ matrix.args }}
 
       - name: Debug - List artifacts
