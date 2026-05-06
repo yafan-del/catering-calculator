@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { DocumentCopy, Delete, Setting, Plus, Close, Top, Link, Aim } from "@element-plus/icons-vue";
+import { DocumentCopy, Delete, Setting, Plus, Close, Top, Link, Aim, Refresh } from "@element-plus/icons-vue";
 
 const isAlwaysOnTop = ref(false);
 const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
@@ -246,7 +246,72 @@ const brandConfigured = computed(() => {
 });
 
 const showSettings = ref(false);
+const showAbout = ref(false);
+const isCheckingUpdate = ref(false);
 const editingBrandIndex = ref(0);
+
+const CHANGELOG = [
+  {
+    version: '1.1.1',
+    date: '2026-05-06',
+    changes: [
+      '修复 macOS 版本闪退问题',
+      '修复更新检查接口平台匹配错误',
+    ],
+  },
+  {
+    version: '1.1.0',
+    date: '2026-05-06',
+    changes: [
+      '新增窗口吸附功能，支持吸附到闲鱼管家窗口',
+      '新增阶梯折扣，按原价区间配置不同收款比例',
+      '图标替换为 Element Plus Icons',
+      '修复 Tauri v2 置顶功能不生效的问题',
+    ],
+  },
+  {
+    version: '1.0.0',
+    date: '2026-04-20',
+    changes: [
+      '基础计算功能（收款、手续费、支出、净利润）',
+      '多品牌管理',
+      '抹零（去分 / 去毛）',
+      '报价复制 + 历史记录',
+      '窗口置顶 + 托盘最小化',
+      '在线更新',
+    ],
+  },
+];
+
+async function manualCheckUpdate() {
+  if (!isTauri) {
+    ElMessage.info('仅桌面版支持更新检查');
+    return;
+  }
+  isCheckingUpdate.value = true;
+  try {
+    const { check } = await import('@tauri-apps/plugin-updater');
+    const update = await check();
+    if (update) {
+      const confirmed = await ElMessageBox.confirm(
+        `发现新版本 v${update.version}，是否立即更新？`,
+        '版本更新',
+        { confirmButtonText: '立即更新', cancelButtonText: '稍后' }
+      ).catch(() => false);
+      if (confirmed) {
+        await update.downloadAndInstall();
+        const { relaunch } = await import('@tauri-apps/plugin-process');
+        await relaunch();
+      }
+    } else {
+      ElMessage.success('已是最新版本');
+    }
+  } catch (e) {
+    ElMessage.error('检查更新失败: ' + (e instanceof Error ? e.message : String(e)));
+  } finally {
+    isCheckingUpdate.value = false;
+  }
+}
 
 const editingBrand = computed({
   get: () => settings.value.brands[editingBrandIndex.value] || settings.value.brands[0],
@@ -768,9 +833,44 @@ function handleClear() {
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="showSettings = false">取消</el-button>
-        <el-button type="primary" @click="handleSettingsSave">保存</el-button>
+        <div style="display: flex; justify-content: space-between; width: 100%">
+          <el-button text @click="showSettings = false; showAbout = true">关于 v{{ APP_VERSION }}</el-button>
+          <div>
+            <el-button @click="showSettings = false">取消</el-button>
+            <el-button type="primary" @click="handleSettingsSave">保存</el-button>
+          </div>
+        </div>
       </template>
+    </el-dialog>
+
+    <!-- 关于弹窗 -->
+    <el-dialog v-model="showAbout" title="关于" width="90%" style="max-width: 420px">
+      <div class="about-content">
+        <div class="about-header">
+          <div class="about-app-name">餐饮计算器</div>
+          <div class="about-version">v{{ APP_VERSION }}</div>
+        </div>
+        <div class="about-actions">
+          <el-button
+            type="primary"
+            :icon="Refresh"
+            :loading="isCheckingUpdate"
+            @click="manualCheckUpdate"
+          >检查更新</el-button>
+        </div>
+        <div class="about-changelog">
+          <div class="changelog-title">更新日志</div>
+          <div v-for="log in CHANGELOG" :key="log.version" class="changelog-item">
+            <div class="changelog-version">
+              <span class="changelog-tag">v{{ log.version }}</span>
+              <span class="changelog-date">{{ log.date }}</span>
+            </div>
+            <ul class="changelog-list">
+              <li v-for="(change, i) in log.changes" :key="i">{{ change }}</li>
+            </ul>
+          </div>
+        </div>
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -1246,6 +1346,82 @@ body {
   padding-bottom: 4px;
   font-size: 13px;
   color: var(--text-regular);
+}
+
+/* ──────────── 关于弹窗 ──────────── */
+.about-content {
+  text-align: center;
+}
+
+.about-header {
+  margin-bottom: 16px;
+}
+
+.about-app-name {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.about-version {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.about-actions {
+  margin-bottom: 20px;
+}
+
+.about-changelog {
+  text-align: left;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.changelog-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.changelog-item {
+  margin-bottom: 16px;
+}
+
+.changelog-version {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.changelog-tag {
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.changelog-date {
+  font-size: 12px;
+  color: var(--text-placeholder);
+}
+
+.changelog-list {
+  padding-left: 18px;
+  margin: 0;
+}
+
+.changelog-list li {
+  font-size: 13px;
+  color: var(--text-regular);
+  line-height: 1.8;
 }
 
 /* ──────────── 阶梯折扣 ──────────── */
