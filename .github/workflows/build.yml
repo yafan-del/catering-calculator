@@ -76,10 +76,12 @@ jobs:
       - name: Debug - List artifacts
         shell: bash
         run: |
-          echo "=== Bundle dir ==="
-          ls -laR src-tauri/${{ matrix.bundle_dir }}/ 2>/dev/null || echo "not found"
+          echo "=== All bundle dirs ==="
+          find src-tauri/target -path "*/bundle/*" -type f 2>/dev/null | head -50
           echo "=== All .sig files ==="
           find src-tauri/target -name "*.sig" 2>/dev/null || echo "none"
+          echo "=== All .tar.gz files ==="
+          find src-tauri/target -name "*.tar.gz" 2>/dev/null || echo "none"
 
       - name: Create Release & Upload
         shell: bash
@@ -88,6 +90,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
           gh release create "$TAG" --title "餐饮计算器 $TAG" --notes "请下载对应平台的安装包。" --latest 2>/dev/null || true
+          # Upload installers (.dmg / .exe)
           for f in src-tauri/${{ matrix.bundle_dir }}/*; do
+            [ -f "$f" ] && [[ "$f" == *.dmg || "$f" == *.exe ]] && echo "Uploading $f" && gh release upload "$TAG" "$f" --clobber || true
+          done
+          # Upload updater bundles (.tar.gz, .sig, .nsis.zip)
+          find src-tauri/target -name "*.tar.gz" -o -name "*.sig" -o -name "*.nsis.zip" | while read f; do
             [ -f "$f" ] && echo "Uploading $f" && gh release upload "$TAG" "$f" --clobber || true
           done
