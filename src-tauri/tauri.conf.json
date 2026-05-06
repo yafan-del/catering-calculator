@@ -37,7 +37,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVGNDdDNThBQ0RDMTVFNTAKUldSUVhzSE5pc1ZIN3g4OFJtVG1TRUo5ZXF0b0FqdGZaSUZmckZZMTRNQjV2aW00R1Bsa0VlTVYK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY3QTU5N0UwQzRCQTBBQkYKUldTL0NyckU0SmVsWjhTejNYcWJ0eWdXQU4rZzYyK25EbWFhakEvdndBdVN3M2UvU2V5L2hCeXoK",
       "endpoints": [
         "https://tele-api.faocn.com/catering/app/update-check/{{target}}/{{arch}}/{{current_version}}"
       ]
