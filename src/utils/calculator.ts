@@ -37,8 +37,20 @@ export function roundDown(amount: number, mode: RoundMode): number {
   return amount
 }
 
+/** 根据金额匹配阶梯折扣 */
+export function matchTierRate(amount: number, tiers?: DiscountTier[]): number | null {
+  if (!tiers || tiers.length === 0) return null
+  for (const tier of tiers) {
+    const inMin = amount >= tier.minAmount
+    const inMax = tier.maxAmount === 0 || amount <= tier.maxAmount
+    if (inMin && inMax) return tier.receivedRate
+  }
+  return null
+}
+
 export function calculate(input: CalcInput): CalcResult {
-  const raw = +(input.originalAmount * input.receivedRate / 100).toFixed(2)
+  const rate = input.receivedRate
+  const raw = +(input.originalAmount * rate / 100).toFixed(2)
   const receivedAmount = roundDown(raw, input.roundMode)
   const expenseAmount = +(input.originalAmount * input.expenseRate / 100).toFixed(2)
   const serviceFee = Math.ceil(receivedAmount * input.feeRate * 100) / 100
@@ -83,6 +95,12 @@ export function clearHistory(): HistoryRecord[] {
 
 const SETTINGS_KEY = 'catering-calc-settings'
 
+export interface DiscountTier {
+  minAmount: number
+  maxAmount: number  // 0 表示无上限
+  receivedRate: number
+}
+
 export interface Brand {
   id: string
   name: string
@@ -90,6 +108,8 @@ export interface Brand {
   expenseRate: number
   feeRate: number
   roundMode: RoundMode
+  useTieredRate?: boolean
+  tiers?: DiscountTier[]
 }
 
 export interface Settings {
@@ -108,6 +128,8 @@ const DEFAULT_BRAND: Brand = {
   expenseRate: 0,
   feeRate: 1.6,
   roundMode: 'none',
+  useTieredRate: false,
+  tiers: [],
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -145,5 +167,7 @@ export function createBrand(name: string): Brand {
     expenseRate: 0,
     feeRate: 1.6,
     roundMode: 'none',
+    useTieredRate: false,
+    tiers: [],
   }
 }

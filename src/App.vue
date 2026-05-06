@@ -1,19 +1,108 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { DocumentCopy, Delete, Setting, Plus, Close } from "@element-plus/icons-vue";
+import { DocumentCopy, Delete, Setting, Plus, Close, Top, Link, Aim } from "@element-plus/icons-vue";
 
 const isAlwaysOnTop = ref(false);
-const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+
+// ──────────── 吸附功能 ────────────
+const snapEnabled = ref(false);
+const snapPosition = ref<'Left' | 'Right' | 'Top' | 'Bottom'>('Right');
+const snapGap = ref(0);
+const snapTargetFound = ref(false);
+const snapTargetTitle = ref('');
+const showSnapPopover = ref(false);
+const SNAP_TARGET_KEYWORD = '闲鱼管家';
+let snapStatusTimer: ReturnType<typeof setInterval> | null = null;
+
+async function toggleSnap(enable: boolean) {
+  if (!isTauri) {
+    ElMessage.warning('吸附功能仅支持桌面端');
+    return;
+  }
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    if (enable) {
+      await invoke('start_snap', {
+        config: {
+          position: snapPosition.value,
+          target_keyword: SNAP_TARGET_KEYWORD,
+          gap: snapGap.value,
+        },
+      });
+      snapEnabled.value = true;
+      startSnapStatusPolling();
+      ElMessage.success('已开启吸附');
+    } else {
+      await invoke('stop_snap');
+      snapEnabled.value = false;
+      snapTargetFound.value = false;
+      snapTargetTitle.value = '';
+      stopSnapStatusPolling();
+      ElMessage.success('已关闭吸附');
+    }
+  } catch (e: any) {
+    ElMessage.error('吸附操作失败: ' + (e?.message || e));
+  }
+}
+
+async function updateSnapStatus() {
+  if (!isTauri || !snapEnabled.value) return;
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const status = await invoke<{
+      enabled: boolean;
+      target_found: boolean;
+      target_title: string | null;
+      position: string;
+    }>('get_snap_status');
+    snapEnabled.value = status.enabled;
+    snapTargetFound.value = status.target_found;
+    snapTargetTitle.value = status.target_title || '';
+  } catch {
+    // 静默
+  }
+}
+
+function startSnapStatusPolling() {
+  stopSnapStatusPolling();
+  snapStatusTimer = setInterval(updateSnapStatus, 2000);
+}
+
+function stopSnapStatusPolling() {
+  if (snapStatusTimer) {
+    clearInterval(snapStatusTimer);
+    snapStatusTimer = null;
+  }
+}
+
+async function handleSnapPositionChange() {
+  if (snapEnabled.value) {
+    await toggleSnap(true);
+  }
+}
+
+async function handleSnapGapChange() {
+  if (snapEnabled.value) {
+    await toggleSnap(true);
+  }
+}
 
 async function toggleAlwaysOnTop() {
   isAlwaysOnTop.value = !isAlwaysOnTop.value;
   if (isTauri) {
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().setAlwaysOnTop(isAlwaysOnTop.value);
-    } catch {
-      // fallback
+      const win = getCurrentWindow();
+      console.log('setAlwaysOnTop =>', isAlwaysOnTop.value, 'window label:', win.label);
+      await win.setAlwaysOnTop(isAlwaysOnTop.value);
+      console.log('setAlwaysOnTop success');
+    } catch (e) {
+      console.error('setAlwaysOnTop failed:', e);
+      ElMessage.error('置顶失败: ' + (e instanceof Error ? e.message : String(e)));
+      isAlwaysOnTop.value = !isAlwaysOnTop.value;
+      return;
     }
   }
   ElMessage.success(isAlwaysOnTop.value ? '已置顶' : '取消置顶');
@@ -21,8 +110,10 @@ async function toggleAlwaysOnTop() {
 import {
   type RoundMode,
   type Brand,
+  type DiscountTier,
   type HistoryRecord,
   calculate,
+  matchTierRate,
   generateQuote,
   getHistory,
   saveHistory,
@@ -45,6 +136,8 @@ const historyList = ref<HistoryRecord[]>([]);
 const originalAmountRef = ref<InstanceType<typeof import('element-plus')['ElInputNumber']> | null>(null);
 const settings = ref(getSettings());
 const activeBrandId = ref(settings.value.activeBrandId);
+
+const currentBrand = computed(() => getActiveBrand(settings.value));
 
 function applyBrand(brand: Brand) {
   receivedRate.value = brand.receivedRate || undefined;
@@ -93,6 +186,10 @@ onMounted(() => {
   historyList.value = getHistory();
   focusOriginalAmount();
   setTimeout(checkForUpdates, 3000);
+  // 恢复吸附状态
+  updateSnapStatus().then(() => {
+    if (snapEnabled.value) startSnapStatusPolling();
+  });
 });
 
 function switchBrand(brandId: string) {
@@ -200,6 +297,22 @@ function removeBrand(index: number) {
   }
 }
 
+function addTier(brandIndex: number) {
+  const brand = settings.value.brands[brandIndex];
+  if (!brand.tiers) brand.tiers = [];
+  const lastMax = brand.tiers.length > 0 ? brand.tiers[brand.tiers.length - 1].maxAmount : 0;
+  brand.tiers.push({
+    minAmount: lastMax > 0 ? lastMax + 1 : 1,
+    maxAmount: 0,
+    receivedRate: brand.receivedRate || 65,
+  });
+}
+
+function removeTier(brandIndex: number, tierIndex: number) {
+  const brand = settings.value.brands[brandIndex];
+  if (brand.tiers) brand.tiers.splice(tierIndex, 1);
+}
+
 function handleSettingsSave() {
   saveSettings(settings.value);
   activeBrandId.value = settings.value.activeBrandId;
@@ -209,11 +322,33 @@ function handleSettingsSave() {
   ElMessage.success("设置已保存");
 }
 
+const effectiveReceivedRate = computed(() => {
+  const brand = currentBrand.value;
+  if (brand.useTieredRate && brand.tiers && brand.tiers.length > 0 && originalAmount.value) {
+    const tierRate = matchTierRate(originalAmount.value, brand.tiers);
+    if (tierRate !== null) return tierRate;
+  }
+  return receivedRate.value || 0;
+});
+
+const matchedTierLabel = computed(() => {
+  const brand = currentBrand.value;
+  if (!brand.useTieredRate || !brand.tiers || !originalAmount.value) return '';
+  const tier = brand.tiers.find(t => {
+    const inMin = originalAmount.value! >= t.minAmount;
+    const inMax = t.maxAmount === 0 || originalAmount.value! <= t.maxAmount;
+    return inMin && inMax;
+  });
+  if (!tier) return '未匹配区间';
+  const max = tier.maxAmount === 0 ? '∞' : tier.maxAmount;
+  return `${tier.minAmount}-${max}元 → ${tier.receivedRate}%`;
+});
+
 const result = computed(() => {
-  if (!originalAmount.value || !receivedRate.value) return null;
+  if (!originalAmount.value || !effectiveReceivedRate.value) return null;
   return calculate({
     originalAmount: originalAmount.value,
-    receivedRate: receivedRate.value,
+    receivedRate: effectiveReceivedRate.value,
     roundMode: roundMode.value,
     feeRate: feeRate.value / 100,
     expenseRate: expenseRate.value || 0,
@@ -297,6 +432,7 @@ onMounted(() => {
 onUnmounted(() => {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
   document.removeEventListener('keydown', handleGlobalKeydown);
+  stopSnapStatusPolling();
 });
 
 const historyExpanded = ref(false);
@@ -321,15 +457,88 @@ function handleClear() {
   <div class="app-container">
     <!-- 标题栏 -->
     <div class="header-row">
-      <span class="header-title">🍜 餐饮计算器</span>
+      <span class="header-title">餐饮计算器</span>
       <div class="header-actions">
+        <el-popover
+          v-model:visible="showSnapPopover"
+          placement="bottom-end"
+          :width="280"
+          trigger="click"
+        >
+          <template #reference>
+            <el-button
+              :type="snapEnabled ? 'primary' : 'default'"
+              :icon="Link"
+              circle
+              size="small"
+              :title="snapEnabled ? '吸附中 - 点击设置' : '窗口吸附'"
+            />
+          </template>
+          <div class="snap-panel">
+            <div class="snap-panel-title">吸附设置</div>
+            <div class="snap-panel-row">
+              <span class="snap-label">目标应用</span>
+              <span class="snap-value">{{ SNAP_TARGET_KEYWORD }}</span>
+            </div>
+            <div class="snap-panel-row">
+              <span class="snap-label">连接状态</span>
+              <span v-if="snapEnabled && snapTargetFound" class="snap-status snap-status-ok">● 已连接</span>
+              <span v-else-if="snapEnabled" class="snap-status snap-status-searching">◌ 搜索中...</span>
+              <span v-else class="snap-status snap-status-off">○ 未启用</span>
+            </div>
+            <div v-if="snapTargetTitle" class="snap-panel-row">
+              <span class="snap-label">窗口标题</span>
+              <span class="snap-value snap-title-ellipsis">{{ snapTargetTitle }}</span>
+            </div>
+            <div class="snap-panel-row">
+              <span class="snap-label">吸附位置</span>
+              <el-radio-group v-model="snapPosition" size="small" @change="handleSnapPositionChange">
+                <el-radio-button value="Left">左</el-radio-button>
+                <el-radio-button value="Right">右</el-radio-button>
+                <el-radio-button value="Top">上</el-radio-button>
+                <el-radio-button value="Bottom">下</el-radio-button>
+              </el-radio-group>
+            </div>
+            <div class="snap-panel-row">
+              <span class="snap-label">间距</span>
+              <el-input-number
+                v-model="snapGap"
+                :min="0"
+                :max="50"
+                :step="1"
+                size="small"
+                :controls="true"
+                style="width: 120px"
+                @change="handleSnapGapChange"
+              />
+              <span class="snap-unit">px</span>
+            </div>
+            <div class="snap-panel-actions">
+              <el-button
+                v-if="!snapEnabled"
+                type="primary"
+                size="small"
+                @click="toggleSnap(true)"
+                style="width: 100%"
+              >开启吸附</el-button>
+              <el-button
+                v-else
+                type="danger"
+                size="small"
+                @click="toggleSnap(false)"
+                style="width: 100%"
+              >关闭吸附</el-button>
+            </div>
+          </div>
+        </el-popover>
         <el-button
           :type="isAlwaysOnTop ? 'warning' : 'default'"
+          :icon="Top"
           circle
           size="small"
           @click="toggleAlwaysOnTop"
           :title="isAlwaysOnTop ? '取消置顶' : '窗口置顶'"
-        >📌</el-button>
+        />
         <el-button :icon="Setting" circle size="small" @click="openSettings" />
       </div>
     </div>
@@ -351,10 +560,11 @@ function handleClear() {
     <div class="input-section">
       <template v-if="brandConfigured">
         <div class="brand-info-bar">
-          <span class="brand-info-item">收款 <b>{{ receivedRate }}%</b></span>
+          <span class="brand-info-item">收款 <b>{{ effectiveReceivedRate }}%</b></span>
           <span v-if="expenseRate" class="brand-info-item">支出 <b>{{ expenseRate }}%</b></span>
           <span class="brand-info-item">费率 <b>{{ feeRate }}%</b></span>
           <span class="brand-info-item">{{ roundMode === 'none' ? '不抹零' : roundMode === 'fen' ? '去分' : '去毛' }}</span>
+          <span v-if="matchedTierLabel" class="brand-info-item tier-matched"><el-icon style="vertical-align: -2px"><Aim /></el-icon> {{ matchedTierLabel }}</span>
         </div>
         <div class="input-row">
           <label>原价金额</label>
@@ -469,13 +679,71 @@ function handleClear() {
         <el-form-item label="品牌名称">
           <el-input v-model="editingBrand.name" placeholder="输入品牌名" />
         </el-form-item>
-        <el-form-item label="收款比例">
+        <el-form-item :label="editingBrand.useTieredRate ? '默认收款比例（未匹配区间时使用）' : '收款比例'">
           <el-input-number
             v-model="editingBrand.receivedRate"
             :min="0" :max="999" :precision="2" :controls="false"
             placeholder="如 65"
           />
           <span class="setting-unit">%</span>
+        </el-form-item>
+        <el-form-item label="阶梯折扣">
+          <div class="tier-config">
+            <el-switch
+              v-model="editingBrand.useTieredRate"
+              active-text="启用"
+              inactive-text="关闭"
+              style="margin-bottom: 10px"
+            />
+            <template v-if="editingBrand.useTieredRate">
+              <div
+                v-for="(tier, tIdx) in (editingBrand.tiers || [])"
+                :key="tIdx"
+                class="tier-row"
+              >
+                <el-input-number
+                  v-model="tier.minAmount"
+                  :min="0" :precision="0" :controls="false"
+                  placeholder="最低"
+                  size="small"
+                  class="tier-input"
+                />
+                <span class="tier-sep">~</span>
+                <el-input-number
+                  v-model="tier.maxAmount"
+                  :min="0" :precision="0" :controls="false"
+                  placeholder="0=无上限"
+                  size="small"
+                  class="tier-input"
+                />
+                <span class="tier-sep">元</span>
+                <el-input-number
+                  v-model="tier.receivedRate"
+                  :min="0" :max="999" :precision="2" :controls="false"
+                  placeholder="折扣"
+                  size="small"
+                  class="tier-input-rate"
+                />
+                <span class="tier-sep">%</span>
+                <el-button
+                  :icon="Delete"
+                  type="danger"
+                  text
+                  size="small"
+                  @click="removeTier(editingBrandIndex, tIdx)"
+                />
+              </div>
+              <el-button
+                type="primary"
+                text
+                size="small"
+                :icon="Plus"
+                @click="addTier(editingBrandIndex)"
+                style="margin-top: 4px"
+              >添加区间</el-button>
+              <div class="tier-hint">最高金额填 0 表示无上限，如：201 ~ 0 元表示 201 元以上</div>
+            </template>
+          </div>
         </el-form-item>
         <el-form-item label="支出比例">
           <el-input-number
@@ -979,6 +1247,118 @@ body {
   padding-bottom: 4px;
   font-size: 13px;
   color: var(--text-regular);
+}
+
+/* ──────────── 阶梯折扣 ──────────── */
+.tier-matched {
+  color: #409eff !important;
+  font-weight: 500;
+}
+
+.tier-config {
+  width: 100%;
+}
+
+.tier-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.tier-input {
+  width: 72px !important;
+  flex-shrink: 0;
+}
+
+.tier-input-rate {
+  width: 68px !important;
+  flex-shrink: 0;
+}
+
+.tier-sep {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.tier-hint {
+  font-size: 11px;
+  color: var(--text-placeholder);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+/* ──────────── 吸附面板 ──────────── */
+.snap-panel {
+  padding: 4px 0;
+}
+
+.snap-panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-lighter);
+}
+
+.snap-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.snap-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  width: 60px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.snap-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.snap-title-ellipsis {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.snap-unit {
+  font-size: 12px;
+  color: var(--text-placeholder);
+}
+
+.snap-status {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.snap-status-ok {
+  color: #67c23a;
+}
+
+.snap-status-searching {
+  color: #e6a23c;
+}
+
+.snap-status-off {
+  color: var(--text-placeholder);
+}
+
+.snap-panel-actions {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-lighter);
 }
 
 @media (max-width: 500px) {
