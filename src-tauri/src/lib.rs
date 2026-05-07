@@ -4,7 +4,7 @@ use snap::{SnapConfig, SnapManager, SnapStatus};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, RunEvent, State, WindowEvent,
+    Manager, State, WindowEvent,
 };
 
 // ──────────────────────────── Tauri Commands ────────────────────────────
@@ -39,6 +39,16 @@ fn show_main_window(app: &tauri::AppHandle) {
         let _ = window.set_focus();
     }
 }
+
+#[cfg(target_os = "macos")]
+fn handle_run_event(app: &tauri::AppHandle, event: tauri::RunEvent) {
+    if let tauri::RunEvent::Reopen { .. } = event {
+        show_main_window(app);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn handle_run_event(_app: &tauri::AppHandle, _event: tauri::RunEvent) {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -93,8 +103,6 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            if let RunEvent::Reopen { .. } = event {
-                show_main_window(app);
-            }
+            handle_run_event(app, event);
         });
 }
