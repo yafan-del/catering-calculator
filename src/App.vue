@@ -20,6 +20,8 @@ const SNAP_TARGET_KEYWORDS = [
   '闲鱼',
   'XianGuanJia',
   'Xian Guan Jia',
+  'XianGuanJia.exe',
+  'xian',
 ];
 const SNAP_TARGET_KEYWORD = SNAP_TARGET_KEYWORDS[0];
 const SNAP_TARGET_DISPLAY_NAME = '闲鱼';
@@ -134,7 +136,7 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.1.4";
+const APP_VERSION = "1.1.5";
 const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
 const ADMIN_API_BASE = 'https://tele-api.faocn.com';
 const CUSTOM_BRAND_PASSWORD_KEY = 'catering-calc-custom-brand-password';
@@ -340,6 +342,15 @@ interface RemoteCateringBrand {
 }
 
 const CHANGELOG = [
+  {
+    version: '1.1.5',
+    date: '2026-05-07',
+    changes: [
+      '优化 Windows 闲管家吸附识别，支持窗口标题、窗口类名和进程名匹配',
+      '新增 Windows 闲管家进程关键词，提升 Windows 版吸附成功率',
+      '过滤小尺寸窗口，减少托盘窗口和无效窗口误匹配',
+    ],
+  },
   {
     version: '1.1.4',
     date: '2026-05-07',

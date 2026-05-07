@@ -239,15 +239,72 @@ fn find_target_window(keywords: &[String]) -> Option<(WindowRect, String)> {
 
 #[cfg(target_os = "windows")]
 fn find_target_window_windows(keywords: &[String]) -> Option<(WindowRect, String)> {
-    use windows::core::PWSTR;
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
+    use windows::Win32::Foundation::{BOOL, CloseHandle, HWND, LPARAM, RECT, TRUE};
+    use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
+        EnumWindows, GetClassNameW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IsWindowVisible,
     };
 
     struct SearchContext {
         keywords: Vec<String>,
         result: Option<(WindowRect, String)>,
+    }
+
+    fn contains_keyword(value: &str, keywords: &[String]) -> bool {
+        let value = value.to_lowercase();
+        keywords
+            .iter()
+            .map(|keyword| keyword.to_lowercase())
+            .any(|keyword| value.contains(&keyword))
+    }
+
+    unsafe fn get_window_text(hwnd: HWND) -> String {
+        let len = GetWindowTextLengthW(hwnd);
+        if len == 0 {
+            return String::new();
+        }
+        let mut buf = vec![0u16; (len + 1) as usize];
+        let read = GetWindowTextW(hwnd, &mut buf);
+        if read == 0 {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buf[..read as usize])
+    }
+
+    unsafe fn get_window_class_name(hwnd: HWND) -> String {
+        let mut buf = vec![0u16; 256];
+        let read = GetClassNameW(hwnd, &mut buf);
+        if read == 0 {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buf[..read as usize])
+    }
+
+    unsafe fn get_process_name(hwnd: HWND) -> String {
+        let mut process_id = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        if process_id == 0 {
+            return String::new();
+        }
+        let process = match OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+            false,
+            process_id,
+        ) {
+            Ok(process) => process,
+            Err(_) => return String::new(),
+        };
+        let mut buf = vec![0u16; 260];
+        let read = GetModuleBaseNameW(process, None, &mut buf);
+        let _ = CloseHandle(process);
+        if read == 0 {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buf[..read as usize])
     }
 
     unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -257,32 +314,39 @@ fn find_target_window_windows(keywords: &[String]) -> Option<(WindowRect, String
             return TRUE;
         }
 
-        let len = GetWindowTextLengthW(hwnd);
-        if len == 0 {
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return TRUE;
+        }
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        if width < 100 || height < 100 {
             return TRUE;
         }
 
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let read = GetWindowTextW(hwnd, &mut buf);
-        if read == 0 {
-            return TRUE;
-        }
+        let title = get_window_text(hwnd);
+        let class_name = get_window_class_name(hwnd);
+        let process_name = get_process_name(hwnd);
+        let matched = contains_keyword(&title, &ctx.keywords)
+            || contains_keyword(&class_name, &ctx.keywords)
+            || contains_keyword(&process_name, &ctx.keywords);
 
-        let title = String::from_utf16_lossy(&buf[..read as usize]);
-        if ctx.keywords.iter().any(|keyword| title.contains(keyword)) {
-            let mut rect = RECT::default();
-            if GetWindowRect(hwnd, &mut rect).is_ok() {
-                ctx.result = Some((
-                    WindowRect {
-                        x: rect.left,
-                        y: rect.top,
-                        width: rect.right - rect.left,
-                        height: rect.bottom - rect.top,
-                    },
-                    title,
-                ));
-                return BOOL(0); // 停止枚举
-            }
+        if matched {
+            let display_title = [process_name, class_name, title]
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+                .join(" - ");
+            ctx.result = Some((
+                WindowRect {
+                    x: rect.left,
+                    y: rect.top,
+                    width,
+                    height,
+                },
+                display_title,
+            ));
+            return BOOL(0);
         }
         TRUE
     }
