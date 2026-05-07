@@ -55,6 +55,7 @@ pub fn run() {
             let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let app_handle = app.handle().clone();
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -69,15 +70,14 @@ pub fn run() {
                     }
                     _ => {}
                 })
-                .on_tray_icon_event(|tray, event| {
+                .on_tray_icon_event(move |_tray, event| {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
                         ..
                     } = event
                     {
-                        let app = tray.app_handle();
-                        show_main_window(app);
+                        show_main_window(&app_handle);
                     }
                 })
                 .build(app)?;
