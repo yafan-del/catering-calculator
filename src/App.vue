@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { DocumentCopy, Delete, Setting, Plus, Close, Top, Link, Aim, Refresh } from "@element-plus/icons-vue";
+import { DocumentCopy, Delete, Setting, Plus, Close, Aim, Refresh } from "@element-plus/icons-vue";
 
 const isAlwaysOnTop = ref(false);
 const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
@@ -134,8 +134,11 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.1.3";
+const APP_VERSION = "1.1.4";
 const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
+const ADMIN_API_BASE = 'https://tele-api.faocn.com';
+const CUSTOM_BRAND_PASSWORD_KEY = 'catering-calc-custom-brand-password';
+const CUSTOM_BRAND_SYNC_DATE_KEY = 'catering-calc-custom-brand-sync-date';
 
 const originalAmount = ref<number | undefined>(undefined);
 const receivedRate = ref<number | undefined>(undefined);
@@ -206,9 +209,18 @@ async function openDownloadUrl(downloadUrl: string) {
   window.open(downloadUrl, '_blank');
 }
 
+function getUpdateDownloadUrl(updateInfo: Record<string, unknown>) {
+  const platform = getUpdatePlatform();
+  const directUrl = String(updateInfo.url || updateInfo.downloadUrl || '');
+  if (directUrl) return directUrl;
+  const platforms = updateInfo.platforms as Record<string, { url?: string; downloadUrl?: string }> | undefined;
+  const platformInfo = platforms?.[platform];
+  return String(platformInfo?.url || platformInfo?.downloadUrl || '');
+}
+
 async function promptDownloadUpdate(updateInfo: Record<string, unknown>, silent = false) {
   const version = String(updateInfo.version || updateInfo.versionName || '');
-  const downloadUrl = String(updateInfo.url || updateInfo.downloadUrl || '');
+  const downloadUrl = getUpdateDownloadUrl(updateInfo);
   if (!version || !downloadUrl || compareVersion(version, APP_VERSION) <= 0) {
     if (!silent) ElMessage.success('已是最新版本');
     return;
@@ -238,6 +250,7 @@ onMounted(() => {
   applyBrand(brand);
   historyList.value = getHistory();
   focusOriginalAmount();
+  autoSyncCustomBrandsOncePerDay();
   setTimeout(checkForUpdates, 3000);
   // 恢复吸附状态
   updateSnapStatus().then(() => {
@@ -309,7 +322,34 @@ const showAbout = ref(false);
 const isCheckingUpdate = ref(false);
 const editingBrandIndex = ref(0);
 
+interface RemoteDiscountRule {
+  min: number;
+  max: number | null;
+  discount: number;
+}
+
+type RemoteDiscountConfig =
+  | { mode: 'single'; value: number }
+  | { mode: 'ranges'; rules: RemoteDiscountRule[] };
+
+interface RemoteCateringBrand {
+  id: number;
+  name: string;
+  saleDiscount?: string;
+  costDiscount?: string;
+}
+
 const CHANGELOG = [
+  {
+    version: '1.1.4',
+    date: '2026-05-07',
+    changes: [
+      '新增定制品牌同步，输入密码后可同步总后台品牌配置',
+      '定制品牌支持每天首次启动自动同步一次',
+      '吸附、置顶按钮改为文字按钮，操作更直观',
+      '修复 macOS 关闭窗口后点击 Dock 图标无法重新显示的问题',
+    ],
+  },
   {
     version: '1.1.3',
     date: '2026-05-06',
@@ -385,6 +425,103 @@ function openSettings() {
   const idx = settings.value.brands.findIndex(b => b.id === activeBrandId.value);
   editingBrandIndex.value = idx >= 0 ? idx : 0;
   showSettings.value = true;
+}
+
+function parseRemoteDiscount(discountJson?: string): RemoteDiscountConfig | null {
+  if (!discountJson) return null;
+  try {
+    return JSON.parse(discountJson) as RemoteDiscountConfig;
+  } catch {
+    return null;
+  }
+}
+
+function getSingleDiscount(discountJson?: string) {
+  const config = parseRemoteDiscount(discountJson);
+  if (!config) return 0;
+  if (config.mode === 'single') return Number(config.value) || 0;
+  return Number(config.rules?.[0]?.discount) || 0;
+}
+
+function getTieredDiscounts(discountJson?: string) {
+  const config = parseRemoteDiscount(discountJson);
+  if (!config || config.mode !== 'ranges' || !config.rules?.length) return [];
+  return config.rules.map((rule) => ({
+    minAmount: Number(rule.min) || 0,
+    maxAmount: rule.max == null ? 0 : Number(rule.max) || 0,
+    receivedRate: Number(rule.discount) || 0,
+  }));
+}
+
+function getTodayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function mapRemoteBrand(remoteBrand: RemoteCateringBrand): Brand {
+  const tiers = getTieredDiscounts(remoteBrand.saleDiscount);
+  return {
+    id: `remote-${remoteBrand.id}`,
+    name: remoteBrand.name,
+    receivedRate: getSingleDiscount(remoteBrand.saleDiscount) || 65,
+    expenseRate: getSingleDiscount(remoteBrand.costDiscount),
+    feeRate: 1.6,
+    roundMode: 'none',
+    useTieredRate: tiers.length > 0,
+    tiers,
+  };
+}
+
+async function applyRemoteBrands(password: string, silent = false) {
+  const response = await fetch(`${ADMIN_API_BASE}/catering/brand?password=${encodeURIComponent(password)}`);
+  const result = await response.json();
+  if (!response.ok || result?.code !== 200) {
+    throw new Error(result?.msg || result?.message || '同步失败');
+  }
+  const remoteBrands = Array.isArray(result.data) ? result.data as RemoteCateringBrand[] : [];
+  const brands = remoteBrands.map(mapRemoteBrand).filter((brand) => brand.name);
+  if (!brands.length) {
+    throw new Error('总后台暂无可同步品牌');
+  }
+  settings.value = {
+    activeBrandId: brands[0].id,
+    brands,
+  };
+  saveSettings(settings.value);
+  activeBrandId.value = brands[0].id;
+  editingBrandIndex.value = 0;
+  applyBrand(brands[0]);
+  localStorage.setItem(CUSTOM_BRAND_PASSWORD_KEY, password);
+  localStorage.setItem(CUSTOM_BRAND_SYNC_DATE_KEY, getTodayKey());
+  if (!silent) ElMessage.success(`已同步 ${brands.length} 个品牌`);
+}
+
+async function syncCustomBrands() {
+  try {
+    const { value: password } = await ElMessageBox.prompt('请输入定制密码', '同步总后台品牌', {
+      confirmButtonText: '同步',
+      cancelButtonText: '取消',
+      inputType: 'password',
+      inputPattern: /.+/,
+      inputErrorMessage: '请输入密码',
+    });
+    await applyRemoteBrands(password);
+  } catch (e) {
+    if (e instanceof Error && e.message) {
+      ElMessage.error(e.message);
+    }
+  }
+}
+
+async function autoSyncCustomBrandsOncePerDay() {
+  const password = localStorage.getItem(CUSTOM_BRAND_PASSWORD_KEY);
+  const lastSyncDate = localStorage.getItem(CUSTOM_BRAND_SYNC_DATE_KEY);
+  if (!password || lastSyncDate === getTodayKey()) return;
+  try {
+    await applyRemoteBrands(password, true);
+  } catch {
+    localStorage.removeItem(CUSTOM_BRAND_PASSWORD_KEY);
+    localStorage.removeItem(CUSTOM_BRAND_SYNC_DATE_KEY);
+  }
 }
 
 function switchEditBrand(index: number) {
@@ -592,11 +729,9 @@ function handleClear() {
           <template #reference>
             <el-button
               :type="snapEnabled ? 'primary' : 'default'"
-              :icon="Link"
-              circle
               size="small"
               :title="snapEnabled ? '吸附中 - 点击设置' : '窗口吸附'"
-            />
+            >{{ snapEnabled ? '已吸附' : '吸附' }}</el-button>
           </template>
           <div class="snap-panel">
             <div class="snap-panel-title">吸附设置</div>
@@ -655,12 +790,11 @@ function handleClear() {
         </el-popover>
         <el-button
           :type="isAlwaysOnTop ? 'warning' : 'default'"
-          :icon="Top"
-          circle
           size="small"
           @click="toggleAlwaysOnTop"
           :title="isAlwaysOnTop ? '取消置顶' : '窗口置顶'"
-        />
+        >{{ isAlwaysOnTop ? '已置顶' : '置顶' }}</el-button>
+        <el-button type="primary" size="small" @click="syncCustomBrands">定制</el-button>
         <el-button :icon="Setting" circle size="small" @click="openSettings" />
       </div>
     </div>
