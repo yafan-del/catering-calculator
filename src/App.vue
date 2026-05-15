@@ -136,11 +136,19 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.1.5";
+const APP_VERSION = "1.2.0";
 const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
 const ADMIN_API_BASE = 'https://tele-api.faocn.com';
 const CUSTOM_BRAND_PASSWORD_KEY = 'catering-calc-custom-brand-password';
 const CUSTOM_BRAND_SYNC_DATE_KEY = 'catering-calc-custom-brand-sync-date';
+const CUSTOM_BRAND_SYNC_TIME_KEY = 'catering-calc-custom-brand-sync-time';
+
+const lastSyncTime = ref(localStorage.getItem(CUSTOM_BRAND_SYNC_TIME_KEY) || '');
+
+const lastSyncDisplay = computed(() => {
+  if (!lastSyncTime.value) return '未同步';
+  return lastSyncTime.value;
+});
 
 const originalAmount = ref<number | undefined>(undefined);
 const receivedRate = ref<number | undefined>(undefined);
@@ -343,6 +351,18 @@ interface RemoteCateringBrand {
 
 const CHANGELOG = [
   {
+    version: '1.2.0',
+    date: '2026-05-15',
+    changes: [
+      '新增定制按钮旁显示上次同步时间',
+      '定制按钮已有密码时直接同步，无需重复输入',
+      '吸附按钮状态三态显示：吸附/搜索中/已吸附',
+      '吸附面板新增未找到窗口提示',
+      '历史记录支持点击回填原价',
+      '复制报价后自动粘贴到闲鱼聊天框（需开启吸附）',
+    ],
+  },
+  {
     version: '1.1.5',
     date: '2026-05-07',
     changes: [
@@ -503,10 +523,33 @@ async function applyRemoteBrands(password: string, silent = false) {
   applyBrand(brands[0]);
   localStorage.setItem(CUSTOM_BRAND_PASSWORD_KEY, password);
   localStorage.setItem(CUSTOM_BRAND_SYNC_DATE_KEY, getTodayKey());
+  const nowStr = new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  localStorage.setItem(CUSTOM_BRAND_SYNC_TIME_KEY, nowStr);
+  lastSyncTime.value = nowStr;
   if (!silent) ElMessage.success(`已同步 ${brands.length} 个品牌`);
 }
 
 async function syncCustomBrands() {
+  const savedPassword = localStorage.getItem(CUSTOM_BRAND_PASSWORD_KEY);
+  if (savedPassword) {
+    // 已有密码，直接同步
+    try {
+      await applyRemoteBrands(savedPassword);
+    } catch (e) {
+      // 密码失效，清除后重新弹窗
+      localStorage.removeItem(CUSTOM_BRAND_PASSWORD_KEY);
+      localStorage.removeItem(CUSTOM_BRAND_SYNC_DATE_KEY);
+      localStorage.removeItem(CUSTOM_BRAND_SYNC_TIME_KEY);
+      lastSyncTime.value = '';
+      ElMessage.warning('定制密码已失效，请重新输入');
+      await promptCustomPassword();
+    }
+  } else {
+    await promptCustomPassword();
+  }
+}
+
+async function promptCustomPassword() {
   try {
     const { value: password } = await ElMessageBox.prompt('请输入定制密码', '同步总后台品牌', {
       confirmButtonText: '同步',
@@ -532,6 +575,8 @@ async function autoSyncCustomBrandsOncePerDay() {
   } catch {
     localStorage.removeItem(CUSTOM_BRAND_PASSWORD_KEY);
     localStorage.removeItem(CUSTOM_BRAND_SYNC_DATE_KEY);
+    localStorage.removeItem(CUSTOM_BRAND_SYNC_TIME_KEY);
+    lastSyncTime.value = '';
   }
 }
 
@@ -670,7 +715,19 @@ async function handleCopyQuote() {
       document.body.removeChild(textarea);
     }
     playSuccessSound();
-    ElMessage.success("已复制报价");
+
+    // 如果吸附已开启且找到目标窗口，自动粘贴到闲鱼聊天框
+    if (isTauri && snapEnabled.value && snapTargetFound.value) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('activate_and_paste');
+        ElMessage.success("已粘贴到闲鱼");
+      } catch (e) {
+        ElMessage.success("已复制报价");
+      }
+    } else {
+      ElMessage.success("已复制报价");
+    }
   } catch {
     ElMessage.error("复制失败，请手动复制");
   }
@@ -723,6 +780,11 @@ function handleClear() {
   historyExpanded.value = false;
   ElMessage.success("已清空");
 }
+
+function applyHistoryItem(item: HistoryRecord) {
+  originalAmount.value = item.originalAmount;
+  focusOriginalAmount();
+}
 </script>
 
 <template>
@@ -739,10 +801,10 @@ function handleClear() {
         >
           <template #reference>
             <el-button
-              :type="snapEnabled ? 'primary' : 'default'"
+              :type="snapEnabled && snapTargetFound ? 'primary' : snapEnabled ? 'warning' : 'default'"
               size="small"
-              :title="snapEnabled ? '吸附中 - 点击设置' : '窗口吸附'"
-            >{{ snapEnabled ? '已吸附' : '吸附' }}</el-button>
+              :title="snapEnabled && snapTargetFound ? '已吸附 - 点击设置' : snapEnabled ? '搜索中 - 点击设置' : '窗口吸附'"
+            >{{ snapEnabled && snapTargetFound ? '已吸附' : snapEnabled ? '搜索中' : '吸附' }}</el-button>
           </template>
           <div class="snap-panel">
             <div class="snap-panel-title">吸附设置</div>
@@ -755,6 +817,9 @@ function handleClear() {
               <span v-if="snapEnabled && snapTargetFound" class="snap-status snap-status-ok">● 已连接</span>
               <span v-else-if="snapEnabled" class="snap-status snap-status-searching">◌ 搜索中...</span>
               <span v-else class="snap-status snap-status-off">○ 未启用</span>
+            </div>
+            <div v-if="snapEnabled && !snapTargetFound" class="snap-panel-row">
+              <span class="snap-hint-warn">未找到闲鱼窗口，请先打开闲鱼/闲管家</span>
             </div>
             <div v-if="snapTargetTitle" class="snap-panel-row">
               <span class="snap-label">窗口标题</span>
@@ -805,7 +870,8 @@ function handleClear() {
           @click="toggleAlwaysOnTop"
           :title="isAlwaysOnTop ? '取消置顶' : '窗口置顶'"
         >{{ isAlwaysOnTop ? '已置顶' : '置顶' }}</el-button>
-        <el-button type="primary" size="small" @click="syncCustomBrands">定制</el-button>
+        <el-button type="primary" size="small" @click="syncCustomBrands" :title="'上次同步：' + lastSyncDisplay">定制</el-button>
+        <span v-if="lastSyncTime" class="sync-time-hint">{{ lastSyncDisplay }}</span>
         <el-button :icon="Setting" circle size="small" @click="openSettings" />
       </div>
     </div>
@@ -899,7 +965,7 @@ function handleClear() {
         <el-button size="small" text type="danger" :icon="Delete" @click.stop="handleClear">清空</el-button>
       </div>
       <div class="history-list">
-        <div v-for="item in displayHistory" :key="item.id" class="history-item">
+        <div v-for="item in displayHistory" :key="item.id" class="history-item history-item-clickable" @click="applyHistoryItem(item)" title="点击回填原价">
           <span class="history-main">
             <span v-if="item.brandName" class="history-brand">{{ item.brandName }}</span>
             原价{{ item.originalAmount }} → 收{{ item.receivedAmount }} →
@@ -1177,6 +1243,12 @@ body {
   gap: 6px;
 }
 
+.sync-time-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 .header-row {
   display: flex;
   justify-content: space-between;
@@ -1417,6 +1489,15 @@ body {
 
 .history-item:last-child {
   border-bottom: none;
+}
+
+.history-item-clickable {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.history-item-clickable:hover {
+  background: var(--bg-card-hover);
 }
 
 .history-main {
@@ -1734,6 +1815,12 @@ body {
 
 .snap-status-off {
   color: var(--text-placeholder);
+}
+
+.snap-hint-warn {
+  font-size: 12px;
+  color: #e6a23c;
+  line-height: 1.4;
 }
 
 .snap-panel-actions {

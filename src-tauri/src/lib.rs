@@ -1,3 +1,4 @@
+mod paste;
 mod snap;
 
 use snap::{SnapConfig, SnapManager, SnapStatus};
@@ -30,6 +31,16 @@ async fn get_snap_status(state: State<'_, SnapManager>) -> Result<SnapStatus, St
     Ok(state.status())
 }
 
+#[tauri::command]
+async fn activate_and_paste(state: State<'_, SnapManager>) -> Result<(), String> {
+    // 复用 snap 配置中的关键词查找目标窗口
+    let keywords = state.keywords();
+    if keywords.is_empty() {
+        return Err("未配置目标窗口关键词".to_string());
+    }
+    paste::activate_and_paste(&keywords)
+}
+
 // ──────────────────────────── App 入口 ────────────────────────────
 
 fn show_main_window(app: &tauri::AppHandle) {
@@ -60,6 +71,7 @@ pub fn run() {
             start_snap,
             stop_snap,
             get_snap_status,
+            activate_and_paste,
         ])
         .setup(|app| {
             let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;

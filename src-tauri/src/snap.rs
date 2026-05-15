@@ -179,6 +179,15 @@ impl SnapManager {
         self.running.load(Ordering::SeqCst)
     }
 
+    pub fn keywords(&self) -> Vec<String> {
+        self.config
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|c| c.keywords())
+            .unwrap_or_default()
+    }
+
     pub fn status(&self) -> SnapStatus {
         let position = self
             .config
