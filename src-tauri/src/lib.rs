@@ -32,11 +32,9 @@ async fn get_snap_status(state: State<'_, SnapManager>) -> Result<SnapStatus, St
 }
 
 #[tauri::command]
-async fn activate_and_paste(state: State<'_, SnapManager>) -> Result<(), String> {
-    // 复用 snap 配置中的关键词查找目标窗口
-    let keywords = state.keywords();
+async fn activate_and_paste(keywords: Vec<String>) -> Result<(), String> {
     if keywords.is_empty() {
-        return Err("未配置目标窗口关键词".to_string());
+        return Err("未提供目标窗口关键词".to_string());
     }
     paste::activate_and_paste(&keywords)
 }

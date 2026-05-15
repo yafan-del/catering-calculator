@@ -716,14 +716,19 @@ async function handleCopyQuote() {
     }
     playSuccessSound();
 
-    // 如果吸附已开启且找到目标窗口，自动粘贴到闲鱼聊天框
-    if (isTauri && snapEnabled.value && snapTargetFound.value) {
+    // 如果吸附已开启，尝试自动粘贴到闲鱼聊天框
+    if (isTauri && snapEnabled.value) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('activate_and_paste');
+        await invoke('activate_and_paste', { keywords: SNAP_TARGET_KEYWORDS });
         ElMessage.success("已粘贴到闲鱼");
-      } catch (e) {
-        ElMessage.success("已复制报价");
+      } catch (e: any) {
+        const msg = typeof e === 'string' ? e : e?.message || '';
+        if (msg) {
+          ElMessage.warning(`已复制，粘贴失败：${msg}`);
+        } else {
+          ElMessage.success("已复制报价");
+        }
       }
     } else {
       ElMessage.success("已复制报价");
