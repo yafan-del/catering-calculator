@@ -136,7 +136,7 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.2.3";
+const APP_VERSION = "1.2.4";
 const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
 const ADMIN_API_BASE = 'https://tele-api.faocn.com';
 const CUSTOM_BRAND_PASSWORD_KEY = 'catering-calc-custom-brand-password';
@@ -350,6 +350,13 @@ interface RemoteCateringBrand {
 }
 
 const CHANGELOG = [
+  {
+    version: '1.2.4',
+    date: '2026-05-16',
+    changes: [
+      '修复 macOS 粘贴不生效的问题，改用 AppleScript 一体化方案',
+    ],
+  },
   {
     version: '1.2.3',
     date: '2026-05-16',

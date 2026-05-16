@@ -5,9 +5,26 @@ use std::time::Duration;
 /// keywords: 窗口匹配关键词列表
 pub fn activate_and_paste(keywords: &[String]) -> Result<(), String> {
     let owner = find_target_owner(keywords)?;
-    activate_window(&owner)?;
-    thread::sleep(Duration::from_millis(500));
-    simulate_paste(&owner)?;
+
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: 用一个 AppleScript 完成 激活 + 等待 + 粘贴，避免 CGEvent 时序问题
+        activate_and_paste_macos(&owner)?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        activate_window(&owner)?;
+        thread::sleep(Duration::from_millis(500));
+        simulate_paste(&owner)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let _ = owner;
+        return Err("不支持的平台".to_string());
+    }
+
     Ok(())
 }
 
@@ -29,39 +46,18 @@ fn find_target_owner(keywords: &[String]) -> Result<String, String> {
     }
 }
 
-// ──────────────────────────── 激活窗口 ────────────────────────────
+// ──────────────────────────── 激活窗口（仅 Windows） ────────────────────────────
 
+#[cfg(target_os = "windows")]
 fn activate_window(owner: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        activate_window_macos(owner)
-    }
-    #[cfg(target_os = "windows")]
-    {
-        activate_window_windows(owner)
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        let _ = owner;
-        Err("不支持的平台".to_string())
-    }
+    activate_window_windows(owner)
 }
 
-// ──────────────────────────── 模拟粘贴 ────────────────────────────
+// ──────────────────────────── 模拟粘贴（仅 Windows） ────────────────────────────
 
+#[cfg(target_os = "windows")]
 fn simulate_paste(_owner: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        simulate_paste_macos()
-    }
-    #[cfg(target_os = "windows")]
-    {
-        simulate_paste_windows()
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        Err("不支持的平台".to_string())
-    }
+    simulate_paste_windows()
 }
 
 // ──────────────────────────── macOS 实现 ────────────────────────────
@@ -132,10 +128,11 @@ fn find_owner_macos(keywords: &[String]) -> Result<String, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn activate_window_macos(owner: &str) -> Result<(), String> {
+fn activate_and_paste_macos(owner: &str) -> Result<(), String> {
+    use std::ffi::c_void;
     use std::process::Command;
 
-    // 使用 AppleScript 激活指定应用
+    // Step 1: AppleScript 激活目标窗口
     let script = format!(
         r#"tell application "System Events"
     set targetProc to first process whose name is "{}"
@@ -155,13 +152,33 @@ end tell"#,
         return Err(format!("激活窗口失败: {}", err));
     }
 
-    Ok(())
-}
+    // Step 2: 等待窗口激活，通过 AppleScript 轮询确认目标窗口在前台
+    let check_script = format!(
+        r#"tell application "System Events"
+    repeat 10 times
+        if frontmost of (first process whose name is "{}") then return "ok"
+        delay 0.1
+    end repeat
+    return "timeout"
+end tell"#,
+        owner.replace('"', "\\\"")
+    );
 
-#[cfg(target_os = "macos")]
-fn simulate_paste_macos() -> Result<(), String> {
-    use std::ffi::c_void;
+    let check_output = Command::new("osascript")
+        .arg("-e")
+        .arg(&check_script)
+        .output()
+        .map_err(|e| format!("检查窗口状态失败: {}", e))?;
 
+    let check_result = String::from_utf8_lossy(&check_output.stdout).trim().to_string();
+    if check_result != "ok" {
+        return Err(format!("目标窗口未能激活（{}），请手动切换到闲鱼后重试", check_result));
+    }
+
+    // 额外等待确保窗口完全就绪
+    thread::sleep(Duration::from_millis(300));
+
+    // Step 3: CGEvent 模拟 Cmd+V（与 v1.2.2 原始参数一致）
     extern "C" {
         fn CGEventSourceCreate(state_id: i32) -> *mut c_void;
         fn CGEventCreateKeyboardEvent(
@@ -176,16 +193,14 @@ fn simulate_paste_macos() -> Result<(), String> {
 
     const VK_ANSI_V: u16 = 9;
     const FLAG_MASK_COMMAND: u64 = 0x100000;
-    // kCGHIDEventTap = 0, 跟 Windows SendInput 一样直接发到 HID 层
     const K_CG_HID_EVENT_TAP: u32 = 0;
 
     unsafe {
-        let source = CGEventSourceCreate(0);
+        let source = CGEventSourceCreate(0); // kCGEventSourceStateCombinedSessionState
         if source.is_null() {
-            return Err("请在「系统设置 → 隐私与安全性 → 辅助功能」中重新授权餐饮计算器".to_string());
+            return Err("请在「系统设置 → 隐私与安全性 → 辅助功能」中授权餐饮计算器".to_string());
         }
 
-        // Cmd down + V down
         let key_down = CGEventCreateKeyboardEvent(source, VK_ANSI_V, true);
         if key_down.is_null() {
             CFRelease(source);
@@ -196,7 +211,6 @@ fn simulate_paste_macos() -> Result<(), String> {
 
         thread::sleep(Duration::from_millis(50));
 
-        // Cmd up + V up
         let key_up = CGEventCreateKeyboardEvent(source, VK_ANSI_V, false);
         if !key_up.is_null() {
             CGEventSetFlags(key_up, FLAG_MASK_COMMAND);
