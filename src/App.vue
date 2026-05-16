@@ -136,7 +136,7 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.2.1";
 const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
 const ADMIN_API_BASE = 'https://tele-api.faocn.com';
 const CUSTOM_BRAND_PASSWORD_KEY = 'catering-calc-custom-brand-password';
@@ -350,6 +350,14 @@ interface RemoteCateringBrand {
 }
 
 const CHANGELOG = [
+  {
+    version: '1.2.1',
+    date: '2026-05-16',
+    changes: [
+      '修复 macOS 自动粘贴到闲鱼聊天框的权限问题',
+      '新增辅助功能权限检测，粘贴失败时给出明确提示',
+    ],
+  },
   {
     version: '1.2.0',
     date: '2026-05-15',
