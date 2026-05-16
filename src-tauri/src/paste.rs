@@ -214,16 +214,55 @@ fn simulate_paste_macos() -> Result<(), String> {
 // ──────────────────────────── Windows 实现 ────────────────────────────
 
 #[cfg(target_os = "windows")]
+static mut PASTE_TARGET_HWND: Option<windows::Win32::Foundation::HWND> = None;
+
+#[cfg(target_os = "windows")]
 fn find_owner_windows(keywords: &[String]) -> Result<String, String> {
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+    use windows::Win32::Foundation::{BOOL, CloseHandle, HWND, LPARAM, TRUE};
+    use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
+        EnumWindows, GetClassNameW, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IsWindowVisible,
     };
 
     struct SearchContext {
         keywords: Vec<String>,
         result: Option<String>,
         hwnd: Option<HWND>,
+        all_titles: Vec<String>,
+    }
+
+    fn contains_keyword(value: &str, keywords: &[String]) -> bool {
+        let value = value.to_lowercase();
+        keywords
+            .iter()
+            .any(|kw| value.contains(&kw.to_lowercase()))
+    }
+
+    unsafe fn get_process_name(hwnd: HWND) -> String {
+        let mut process_id = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        if process_id == 0 {
+            return String::new();
+        }
+        let process = match OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+            false,
+            process_id,
+        ) {
+            Ok(p) => p,
+            Err(_) => return String::new(),
+        };
+        let mut buf = vec![0u16; 260];
+        let read = GetModuleBaseNameW(process, None, &mut buf);
+        let _ = CloseHandle(process);
+        if read == 0 {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buf[..read as usize])
     }
 
     unsafe extern "system" fn enum_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -240,16 +279,28 @@ fn find_owner_windows(keywords: &[String]) -> Result<String, String> {
         if read == 0 {
             return TRUE;
         }
-        let title = String::from_utf16_lossy(&buf[..read as usize]).to_lowercase();
-        let matched = ctx
-            .keywords
-            .iter()
-            .any(|kw| title.contains(&kw.to_lowercase()));
+        let title = String::from_utf16_lossy(&buf[..read as usize]);
+
+        let mut class_buf = vec![0u16; 256];
+        let class_read = GetClassNameW(hwnd, &mut class_buf);
+        let class_name = if class_read > 0 {
+            String::from_utf16_lossy(&class_buf[..class_read as usize])
+        } else {
+            String::new()
+        };
+
+        let process_name = get_process_name(hwnd);
+
+        let matched = contains_keyword(&title, &ctx.keywords)
+            || contains_keyword(&class_name, &ctx.keywords)
+            || contains_keyword(&process_name, &ctx.keywords);
+
         if matched {
-            ctx.result = Some(title);
+            ctx.result = Some(title.clone());
             ctx.hwnd = Some(hwnd);
             return BOOL(0);
         }
+        ctx.all_titles.push(title);
         TRUE
     }
 
@@ -257,6 +308,7 @@ fn find_owner_windows(keywords: &[String]) -> Result<String, String> {
         keywords: keywords.to_vec(),
         result: None,
         hwnd: None,
+        all_titles: Vec::new(),
     };
 
     unsafe {
@@ -267,52 +319,28 @@ fn find_owner_windows(keywords: &[String]) -> Result<String, String> {
     }
 
     match ctx.result {
-        Some(title) => Ok(title),
-        None => Err("未找到目标窗口，请先打开闲鱼/闲管家".to_string()),
+        Some(title) => {
+            unsafe { PASTE_TARGET_HWND = ctx.hwnd; }
+            Ok(title)
+        }
+        None => {
+            let top_titles: Vec<String> = ctx.all_titles.iter().take(10).cloned().collect();
+            Err(format!(
+                "未找到目标窗口，请先打开闲鱼/闲管家。当前窗口: {}",
+                top_titles.join(" | ")
+            ))
+        }
     }
 }
 
 #[cfg(target_os = "windows")]
-static mut FOUND_HWND: Option<windows::Win32::Foundation::HWND> = None;
-
-#[cfg(target_os = "windows")]
-fn activate_window_windows(owner: &str) -> Result<(), String> {
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, TRUE};
+fn activate_window_windows(_owner: &str) -> Result<(), String> {
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
         SetForegroundWindow, ShowWindow, SW_RESTORE,
     };
 
-    unsafe extern "system" fn find_callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let keyword = &*(lparam.0 as *const String);
-        if !IsWindowVisible(hwnd).as_bool() {
-            return TRUE;
-        }
-        let len = GetWindowTextLengthW(hwnd);
-        if len == 0 {
-            return TRUE;
-        }
-        let mut buf = vec![0u16; (len + 1) as usize];
-        let read = GetWindowTextW(hwnd, &mut buf);
-        if read == 0 {
-            return TRUE;
-        }
-        let title = String::from_utf16_lossy(&buf[..read as usize]).to_lowercase();
-        if title.contains(&keyword.to_lowercase()) {
-            FOUND_HWND = Some(hwnd);
-            return BOOL(0);
-        }
-        TRUE
-    }
-
-    let keyword = owner.to_string();
     unsafe {
-        FOUND_HWND = None;
-        let _ = EnumWindows(
-            Some(find_callback),
-            LPARAM(&keyword as *const String as isize),
-        );
-        if let Some(hwnd) = FOUND_HWND {
+        if let Some(hwnd) = PASTE_TARGET_HWND {
             let _ = ShowWindow(hwnd, SW_RESTORE);
             let _ = SetForegroundWindow(hwnd);
             Ok(())

@@ -136,7 +136,7 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.2.2";
+const APP_VERSION = "1.2.3";
 const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
 const ADMIN_API_BASE = 'https://tele-api.faocn.com';
 const CUSTOM_BRAND_PASSWORD_KEY = 'catering-calc-custom-brand-password';
@@ -350,6 +350,14 @@ interface RemoteCateringBrand {
 }
 
 const CHANGELOG = [
+  {
+    version: '1.2.3',
+    date: '2026-05-16',
+    changes: [
+      '修复 Windows 粘贴找不到目标窗口的问题',
+      '粘贴失败时显示当前窗口列表，方便排查',
+    ],
+  },
   {
     version: '1.2.2',
     date: '2026-05-16',
