@@ -165,7 +165,6 @@ fn simulate_paste_macos(_owner: &str) -> Result<(), String> {
     use std::ffi::c_void;
 
     extern "C" {
-        fn AXIsProcessTrusted() -> bool;
         fn CGEventSourceCreate(state_id: i32) -> *mut c_void;
         fn CGEventCreateKeyboardEvent(
             source: *const c_void,
@@ -177,13 +176,6 @@ fn simulate_paste_macos(_owner: &str) -> Result<(), String> {
         fn CFRelease(cf: *const c_void);
     }
 
-    // 先检查辅助功能权限
-    unsafe {
-        if !AXIsProcessTrusted() {
-            return Err("请在「系统设置 → 隐私与安全性 → 辅助功能」中授权本程序（开发模式需添加 target/debug/catering-calculator）".to_string());
-        }
-    }
-
     const SOURCE_STATE_COMBINED: i32 = 0;
     const HID_EVENT_TAP: u32 = 0;
     const FLAG_MASK_COMMAND: u64 = 0x100000;
@@ -192,7 +184,7 @@ fn simulate_paste_macos(_owner: &str) -> Result<(), String> {
     unsafe {
         let source = CGEventSourceCreate(SOURCE_STATE_COMBINED);
         if source.is_null() {
-            return Err("无法创建事件源".to_string());
+            return Err("无法创建事件源，请在「系统设置 → 隐私与安全性 → 辅助功能」中删除后重新添加餐饮计算器".to_string());
         }
 
         let key_down = CGEventCreateKeyboardEvent(source, VK_ANSI_V, true);
