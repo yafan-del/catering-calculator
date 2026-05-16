@@ -162,51 +162,23 @@ end tell"#,
 
 #[cfg(target_os = "macos")]
 fn simulate_paste_macos(_owner: &str) -> Result<(), String> {
-    use std::ffi::c_void;
+    use std::process::Command;
 
-    extern "C" {
-        fn CGEventSourceCreate(state_id: i32) -> *mut c_void;
-        fn CGEventCreateKeyboardEvent(
-            source: *const c_void,
-            virtual_key: u16,
-            key_down: bool,
-        ) -> *mut c_void;
-        fn CGEventSetFlags(event: *mut c_void, flags: u64);
-        fn CGEventPost(tap: u32, event: *mut c_void);
-        fn CFRelease(cf: *const c_void);
-    }
+    // 通过 AppleScript 的 System Events 发送 Cmd+V
+    // 不依赖当前 App 的辅助功能权限
+    let script = r#"tell application "System Events"
+    keystroke "v" using command down
+end tell"#;
 
-    const SOURCE_STATE_COMBINED: i32 = 0;
-    const HID_EVENT_TAP: u32 = 0;
-    const FLAG_MASK_COMMAND: u64 = 0x100000;
-    const VK_ANSI_V: u16 = 9;
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| format!("执行粘贴脚本失败: {}", e))?;
 
-    unsafe {
-        let source = CGEventSourceCreate(SOURCE_STATE_COMBINED);
-        if source.is_null() {
-            return Err("无法创建事件源，请在「系统设置 → 隐私与安全性 → 辅助功能」中删除后重新添加餐饮计算器".to_string());
-        }
-
-        let key_down = CGEventCreateKeyboardEvent(source, VK_ANSI_V, true);
-        if key_down.is_null() {
-            CFRelease(source);
-            return Err("无法创建按键事件".to_string());
-        }
-        CGEventSetFlags(key_down, FLAG_MASK_COMMAND);
-        CGEventPost(HID_EVENT_TAP, key_down);
-
-        // 短暂延迟确保按键事件被处理
-        thread::sleep(Duration::from_millis(50));
-
-        let key_up = CGEventCreateKeyboardEvent(source, VK_ANSI_V, false);
-        if !key_up.is_null() {
-            CGEventSetFlags(key_up, FLAG_MASK_COMMAND);
-            CGEventPost(HID_EVENT_TAP, key_up);
-            CFRelease(key_up);
-        }
-
-        CFRelease(key_down);
-        CFRelease(source);
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("粘贴失败: {}", err));
     }
 
     Ok(())
