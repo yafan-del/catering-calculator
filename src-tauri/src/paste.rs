@@ -49,19 +49,17 @@ fn activate_window(owner: &str) -> Result<(), String> {
 
 // ──────────────────────────── 模拟粘贴 ────────────────────────────
 
-fn simulate_paste(owner: &str) -> Result<(), String> {
+fn simulate_paste(_owner: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        simulate_paste_macos(owner)
+        simulate_paste_macos()
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = owner;
         simulate_paste_windows()
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let _ = owner;
         Err("不支持的平台".to_string())
     }
 }
@@ -161,24 +159,53 @@ end tell"#,
 }
 
 #[cfg(target_os = "macos")]
-fn simulate_paste_macos(_owner: &str) -> Result<(), String> {
-    use std::process::Command;
+fn simulate_paste_macos() -> Result<(), String> {
+    use std::ffi::c_void;
 
-    // 通过 AppleScript 的 System Events 发送 Cmd+V
-    // 不依赖当前 App 的辅助功能权限
-    let script = r#"tell application "System Events"
-    keystroke "v" using command down
-end tell"#;
+    extern "C" {
+        fn CGEventSourceCreate(state_id: i32) -> *mut c_void;
+        fn CGEventCreateKeyboardEvent(
+            source: *const c_void,
+            virtual_key: u16,
+            key_down: bool,
+        ) -> *mut c_void;
+        fn CGEventSetFlags(event: *mut c_void, flags: u64);
+        fn CGEventPost(tap: u32, event: *mut c_void);
+        fn CFRelease(cf: *const c_void);
+    }
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .map_err(|e| format!("执行粘贴脚本失败: {}", e))?;
+    const VK_ANSI_V: u16 = 9;
+    const FLAG_MASK_COMMAND: u64 = 0x100000;
+    // kCGHIDEventTap = 0, 跟 Windows SendInput 一样直接发到 HID 层
+    const K_CG_HID_EVENT_TAP: u32 = 0;
 
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("粘贴失败: {}", err));
+    unsafe {
+        let source = CGEventSourceCreate(0);
+        if source.is_null() {
+            return Err("请在「系统设置 → 隐私与安全性 → 辅助功能」中重新授权餐饮计算器".to_string());
+        }
+
+        // Cmd down + V down
+        let key_down = CGEventCreateKeyboardEvent(source, VK_ANSI_V, true);
+        if key_down.is_null() {
+            CFRelease(source);
+            return Err("无法创建按键事件".to_string());
+        }
+        CGEventSetFlags(key_down, FLAG_MASK_COMMAND);
+        CGEventPost(K_CG_HID_EVENT_TAP, key_down);
+
+        thread::sleep(Duration::from_millis(50));
+
+        // Cmd up + V up
+        let key_up = CGEventCreateKeyboardEvent(source, VK_ANSI_V, false);
+        if !key_up.is_null() {
+            CGEventSetFlags(key_up, FLAG_MASK_COMMAND);
+            CGEventPost(K_CG_HID_EVENT_TAP, key_up);
+            CFRelease(key_up);
+        }
+
+        CFRelease(key_down);
+        CFRelease(source);
     }
 
     Ok(())

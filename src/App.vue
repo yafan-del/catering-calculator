@@ -136,7 +136,7 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.2.1";
+const APP_VERSION = "1.2.2";
 const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
 const ADMIN_API_BASE = 'https://tele-api.faocn.com';
 const CUSTOM_BRAND_PASSWORD_KEY = 'catering-calc-custom-brand-password';
@@ -350,6 +350,14 @@ interface RemoteCateringBrand {
 }
 
 const CHANGELOG = [
+  {
+    version: '1.2.2',
+    date: '2026-05-16',
+    changes: [
+      '修复 macOS 自动粘贴权限问题，改用 CGEvent 与 Windows SendInput 统一方案',
+      '支持本地代码签名，避免更新后辅助功能权限失效',
+    ],
+  },
   {
     version: '1.2.1',
     date: '2026-05-16',
