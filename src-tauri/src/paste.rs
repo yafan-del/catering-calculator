@@ -1,15 +1,15 @@
 use std::thread;
 use std::time::Duration;
 
-/// 激活目标窗口并模拟粘贴（Cmd+V / Ctrl+V）
+/// 激活目标窗口并模拟粘贴（Cmd+V / Ctrl+V），可选粘贴后发送
 /// keywords: 窗口匹配关键词列表
-pub fn activate_and_paste(keywords: &[String]) -> Result<(), String> {
+/// auto_send: 粘贴后是否自动按 Enter 发送
+pub fn activate_and_paste(keywords: &[String], auto_send: bool) -> Result<(), String> {
     let owner = find_target_owner(keywords)?;
 
     #[cfg(target_os = "macos")]
     {
-        // macOS: 用一个 AppleScript 完成 激活 + 等待 + 粘贴，避免 CGEvent 时序问题
-        activate_and_paste_macos(&owner)?;
+        activate_and_paste_macos(&owner, auto_send)?;
     }
 
     #[cfg(target_os = "windows")]
@@ -17,11 +17,15 @@ pub fn activate_and_paste(keywords: &[String]) -> Result<(), String> {
         activate_window(&owner)?;
         thread::sleep(Duration::from_millis(500));
         simulate_paste(&owner)?;
+        if auto_send {
+            thread::sleep(Duration::from_millis(300));
+            simulate_enter_windows()?;
+        }
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let _ = owner;
+        let _ = (owner, auto_send);
         return Err("不支持的平台".to_string());
     }
 
@@ -128,7 +132,7 @@ fn find_owner_macos(keywords: &[String]) -> Result<String, String> {
 }
 
 #[cfg(target_os = "macos")]
-fn activate_and_paste_macos(owner: &str) -> Result<(), String> {
+fn activate_and_paste_macos(owner: &str, auto_send: bool) -> Result<(), String> {
     use std::ffi::c_void;
     use std::process::Command;
 
@@ -219,6 +223,27 @@ end tell"#,
         }
 
         CFRelease(key_down);
+
+        // 粘贴后自动发送：模拟 Enter 键
+        if auto_send {
+            thread::sleep(Duration::from_millis(300));
+
+            const VK_RETURN: u16 = 36;
+            let enter_down = CGEventCreateKeyboardEvent(source, VK_RETURN, true);
+            if !enter_down.is_null() {
+                CGEventSetFlags(enter_down, 0); // 无修饰键
+                CGEventPost(K_CG_HID_EVENT_TAP, enter_down);
+                thread::sleep(Duration::from_millis(50));
+
+                let enter_up = CGEventCreateKeyboardEvent(source, VK_RETURN, false);
+                if !enter_up.is_null() {
+                    CGEventPost(K_CG_HID_EVENT_TAP, enter_up);
+                    CFRelease(enter_up);
+                }
+                CFRelease(enter_down);
+            }
+        }
+
         CFRelease(source);
     }
 
@@ -430,6 +455,49 @@ fn simulate_paste_windows() -> Result<(), String> {
         let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
         if sent != 4 {
             return Err("模拟粘贴按键失败".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn simulate_enter_windows() -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
+        KEYEVENTF_KEYUP, VK_RETURN,
+    };
+
+    unsafe {
+        let inputs = [
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_RETURN,
+                        wScan: 0,
+                        dwFlags: KEYBD_EVENT_FLAGS(0),
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+            INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VK_RETURN,
+                        wScan: 0,
+                        dwFlags: KEYEVENTF_KEYUP,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            },
+        ];
+
+        let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        if sent != 2 {
+            return Err("模拟发送按键失败".to_string());
         }
     }
     Ok(())

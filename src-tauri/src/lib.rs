@@ -32,11 +32,11 @@ async fn get_snap_status(state: State<'_, SnapManager>) -> Result<SnapStatus, St
 }
 
 #[tauri::command]
-async fn activate_and_paste(keywords: Vec<String>) -> Result<(), String> {
+async fn activate_and_paste(keywords: Vec<String>, auto_send: Option<bool>) -> Result<(), String> {
     if keywords.is_empty() {
         return Err("未提供目标窗口关键词".to_string());
     }
-    paste::activate_and_paste(&keywords)
+    paste::activate_and_paste(&keywords, auto_send.unwrap_or(false))
 }
 
 // ──────────────────────────── App 入口 ────────────────────────────

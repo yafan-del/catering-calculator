@@ -10,6 +10,7 @@ const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in windo
 const snapEnabled = ref(false);
 const snapPosition = ref<'Left' | 'Right'>('Right');
 const snapGap = ref(0);
+const autoSendEnabled = ref(localStorage.getItem('catering-calc-auto-send') === 'true');
 const snapTargetFound = ref(false);
 const snapTargetTitle = ref('');
 const showSnapPopover = ref(false);
@@ -96,6 +97,10 @@ async function handleSnapPositionChange() {
   }
 }
 
+function onAutoSendChange(val: boolean) {
+  localStorage.setItem('catering-calc-auto-send', String(val));
+}
+
 async function handleSnapGapChange() {
   if (snapEnabled.value) {
     await toggleSnap(true);
@@ -136,7 +141,7 @@ import {
   createBrand,
 } from "./utils/calculator";
 
-const APP_VERSION = "1.2.4";
+const APP_VERSION = "1.2.5";
 const UPDATE_CHECK_URL = 'https://tele-api.faocn.com/catering/app/update-check';
 const ADMIN_API_BASE = 'https://tele-api.faocn.com';
 const CUSTOM_BRAND_PASSWORD_KEY = 'catering-calc-custom-brand-password';
@@ -351,10 +356,18 @@ interface RemoteCateringBrand {
 
 const CHANGELOG = [
   {
+    version: '1.2.5',
+    date: '2026-05-16',
+    changes: [
+      '新增粘贴后自动发送功能，吸附面板可开关控制',
+      'macOS/Windows 双平台支持粘贴+发送',
+    ],
+  },
+  {
     version: '1.2.4',
     date: '2026-05-16',
     changes: [
-      '修复 macOS 粘贴不生效的问题，改用 AppleScript 一体化方案',
+      '修复 macOS 粘贴不生效的问题，增加窗口激活确认',
     ],
   },
   {
@@ -751,8 +764,8 @@ async function handleCopyQuote() {
     if (isTauri && snapEnabled.value) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('activate_and_paste', { keywords: SNAP_TARGET_KEYWORDS });
-        ElMessage.success("已粘贴到闲鱼");
+        await invoke('activate_and_paste', { keywords: SNAP_TARGET_KEYWORDS, autoSend: autoSendEnabled.value });
+        ElMessage.success(autoSendEnabled.value ? "已粘贴并发送到闲鱼" : "已粘贴到闲鱼");
       } catch (e: any) {
         const msg = typeof e === 'string' ? e : e?.message || '';
         if (msg) {
@@ -881,6 +894,14 @@ function applyHistoryItem(item: HistoryRecord) {
                 @change="handleSnapGapChange"
               />
               <span class="snap-unit">px</span>
+            </div>
+            <div v-if="snapEnabled" class="snap-panel-row">
+              <span class="snap-label">自动发送</span>
+              <el-switch
+                v-model="autoSendEnabled"
+                size="small"
+                @change="onAutoSendChange"
+              />
             </div>
             <div class="snap-panel-actions">
               <el-button
